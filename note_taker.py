@@ -1,5 +1,17 @@
-import pyaudio, wave
+import pyaudio, wave, sys
 from faster_whisper import WhisperModel
+from PySide6.QtWidgets import QApplication, QPushButton, QMainWindow, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QProgressBar, QTabWidget, QListWidget, QStackedWidget
+from PySide6.QtCore import Slot
+
+@Slot()
+def hello():
+    print("Button clicked, sup")
+
+app = QApplication(sys.argv)
+button = QPushButton("click me")
+button.clicked.connect(hello)
+button.show()
+app.exec()
 
 model_size = "small"
 chunk = 1024  # Record in chunks of 1024 samples
@@ -9,6 +21,12 @@ fs = 44100  # Record at 44100 samples per second
 seconds = 10
 filename = "output.wav"
 
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        
+        self.setWindowTitle("Lecture Assistant")
+        self.resize(1200, 800)
 def record():
     p = pyaudio.PyAudio()  # Create an interface to PortAudio
 
@@ -72,6 +90,8 @@ def to_txt(segments):
 
 if __name__ == "__main__":
     file = filename
+    
+    '''
     while True:
         user_input = input("Input: ")
         if user_input.lower() == "record":
@@ -82,3 +102,4 @@ if __name__ == "__main__":
             break
         else:
             print("Unknown input")
+        '''
