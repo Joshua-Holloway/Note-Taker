@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QFrame
 )
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot
 
 
 model_size = "small"
@@ -27,11 +27,67 @@ fs = 44100  # Record at 44100 samples per second
 seconds = 10
 filename = "output.wav"
 
+class RecordingWorker(QObject):
+    finished = Signal(str)
+    error = Signal(str)
 
-class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
+    @Slot()
+    def run(self):
+        p = None
+        stream = None
+        frames = []
+
+        try:
+            p = pyaudio.PyAudio()
+
+            stream = p.open(
+                format=sample_format,
+                channels=channels,
+                rate=fs,
+                frames_per_buffer=chunk,
+                input=True
+            )
+
+            print("Recording")
+
+            while not QThread.currentThread().isInterruptionRequested():
+                data = stream.read(chunk)
+                frames.append(data)
+
+            print("Recording finished")
+
+            stream.stop_stream()
+            stream.close()
+            stream = None
+
+            wf = wave.open(filename, "wb")
+            wf.setnchannels(channels)
+            wf.setsampwidth(p.get_sample_size(sample_format))
+            wf.setframerate(fs)
+            wf.writeframes(b"".join(frames))
+            wf.close()
+
+            self.finished.emit(filename)
+
+        except Exception as e:
+            self.error.emit(str(e))
+
+        finally:
+            if stream is not None:
+                stream.stop_stream()
+                stream.close()
+
+            if p is not None:
+                p.terminate()
+                
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.record_thread = None
+        self.recording_worker = None
         self.setWindowTitle("Lecture Assistant")
         self.resize(1200, 800)
 
@@ -168,16 +224,9 @@ class MainWindow(QMainWindow):
         # --------------------------------------------------
         # BUTTON FUNCTIONS GO HERE LATER
         # --------------------------------------------------
-
-        # self.record_button.clicked.connect(...)
-        #
         # Eventually something like:
-        # self.record_button.clicked.connect(self.start_recording)
-        #
-        # DO NOT call:
-        # self.record_button.clicked.connect(record())
-        #
-        # The () would execute record immediately.
+        self.record_button.clicked.connect(self.start_recording)
+        self.stop_button.clicked.connect(self.stop_recording)
 
         # self.stop_button.clicked.connect(...)
 
@@ -190,7 +239,7 @@ class MainWindow(QMainWindow):
 
         # self.generate_notes_button.clicked.connect(...)
         #
-        # Eventually this will call your Ollama note generation.
+        # Eventually this will call Ollama note generation.
 
         controls_layout.addWidget(self.record_button)
         controls_layout.addWidget(self.stop_button)
@@ -371,49 +420,77 @@ class MainWindow(QMainWindow):
                 border-bottom: 2px solid #e8e8ea;
             }
         """)
+    @Slot(str)
+    def recording_finished(self, recorded_file):
+        self.status_label.setText("● Recording saved")
 
+        self.record_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
 
+        print(f"Saved recording to {recorded_file}")
+
+        self.record_thread = None
+        self.recording_worker = None
+        
+    @Slot(str)
+    def recording_error(self, error_message):
+        self.status_label.setText("● Recording error")
+
+        self.record_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+
+        print(f"Recording error: {error_message}")
+        
+    def start_recording(self):
+        self.record_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+
+        self.status_label.setText("● Recording")
+
+        self.record_thread = QThread()
+        self.recording_worker = RecordingWorker()
+
+        self.recording_worker.moveToThread(self.record_thread)
+
+        self.record_thread.started.connect(
+            self.recording_worker.run
+        )
+
+        self.recording_worker.finished.connect(
+            self.recording_finished
+        )
+
+        self.recording_worker.error.connect(
+            self.recording_error
+        )
+
+        self.recording_worker.finished.connect(
+            self.record_thread.quit
+        )
+
+        self.recording_worker.finished.connect(
+            self.recording_worker.deleteLater
+        )
+
+        self.record_thread.finished.connect(
+            self.record_thread.deleteLater
+        )
+
+        self.record_thread.start()
+    
+
+    def stop_recording(self):
+        if self.record_thread is not None:
+            self.status_label.setText("● Stopping...")
+            self.stop_button.setEnabled(False)
+
+            self.record_thread.requestInterruption()
+        
 # ==========================================================
 # BACKEND
 #
 # I've left this section logically unchanged.
 # ==========================================================
-
-
-def record():
-    p = pyaudio.PyAudio()  # Create an interface to PortAudio
-
-    print("Recording")
-
-    stream = p.open(
-        format=sample_format,
-        channels=channels,
-        rate=fs,
-        frames_per_buffer=chunk,
-        input=True
-    )
-
-    frames = []
-
-    for i in range(0, int(fs / chunk * seconds)):
-        data = stream.read(chunk)
-        frames.append(data)
-
-    stream.stop_stream()
-    stream.close()
-
-    p.terminate()
-
-    print("Recording finished")
-
-    wf = wave.open(filename, 'wb')
-    wf.setnchannels(channels)
-    wf.setsampwidth(p.get_sample_size(sample_format))
-    wf.setframerate(fs)
-    wf.writeframes(b''.join(frames))
-    wf.close()
-
-    return filename
 
 
 def transcribe(file):
