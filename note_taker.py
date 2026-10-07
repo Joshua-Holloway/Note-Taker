@@ -27,6 +27,36 @@ fs = 44100  # Record at 44100 samples per second
 seconds = 10
 filename = "output.wav"
 
+class TranscribingWorker(QObject):
+    finished = Signal(str)
+    error = Signal(str)
+    
+    def __init__(self):
+        super().__init__()
+    
+    @Slot()
+    def run(self):
+        model = WhisperModel(
+            model_size,
+            device="cpu",
+            compute_type="int8"
+        )
+        
+        segments, info = model.transcribe(filename,
+                                          beam_size = 5)
+        
+        with open(filename, "w") as f:
+            for segment in segments:
+                f.write(f"{segment.txt}\n")
+            
+            f.close
+        
+    def to_txt(self, segments):
+        with open(filename, "w") as f:
+                    for segment in segments:
+                        f.write(f"{segment.txt}\n")
+                    
+                    f.close
 class RecordingWorker(QObject):
     finished = Signal(str)
     error = Signal(str)
@@ -87,7 +117,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.record_thread = None
+        self.transcribing_thread = None
         self.recording_worker = None
+        self.transcribing_worker = None
         self.setWindowTitle("Lecture Assistant")
         self.resize(1200, 800)
 
@@ -334,7 +366,7 @@ class MainWindow(QMainWindow):
         # --------------------------------------------------
         # BASIC TEMPORARY STYLING
         #
-        # Eventually I recommend moving all of this into
+        # Eventually move all of this into
         # a separate style.qss file.
         # --------------------------------------------------
 
@@ -420,6 +452,61 @@ class MainWindow(QMainWindow):
                 border-bottom: 2px solid #e8e8ea;
             }
         """)
+    def start_transcribing(self):
+        self.transcribe_button.setEnabled(False)
+        
+        self.status_label.setText("҉ Transcribing")
+        
+        self.transcribing_thread = QThread()
+        self.transcribing_worker = TranscribingWorker()
+        
+        self.transcribing_worker.moveToThread(self.transcribing_thread)
+        
+        self.transcribing_thread.started.connect(
+            self.transcribing_worker.run
+        )
+        
+        self.transcribing_worker.finished.connect(
+            self.transcribing_finished
+        )
+        
+        self.transcribing_worker.error.connect(
+            self.transcribing_error
+        )
+        
+        self.transcribing_worker.finished.connect(
+            self.transcribing_thread.quit
+        )
+        
+        self.transcribing_worker.finished.connect(
+            self.transcribing_worker.deleteLater
+        )
+        
+        self.transcribing_thread.finished.connect(
+            self.transcribing_thread.deleteLater
+        )
+        
+        self.transcribing_thread.start()
+    
+    @Slot(str)
+    def transcribing_finished(self, transcribed_file):
+        self.status_label.setText("● Transcribing saved")
+        
+        self.transcribe_button.setEnabled(True)
+        
+        print(f"Saved transcription to {transcribed_file}")
+        
+        self.transcribing_thread = None
+        self.transcribing_worker = None
+    
+    @Slot(str)
+    def transcribing_error(self, error_message):
+        self.status_label.setText("● Transcribing error")
+        
+        self.transcribe_button.setEnabled(True)
+        
+        print(f"Transcribing error: {error_message}")
+
     @Slot(str)
     def recording_finished(self, recorded_file):
         self.status_label.setText("● Recording saved")
@@ -488,8 +575,6 @@ class MainWindow(QMainWindow):
         
 # ==========================================================
 # BACKEND
-#
-# I've left this section logically unchanged.
 # ==========================================================
 
 
