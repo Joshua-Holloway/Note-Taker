@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from PySide6.QtCore import Qt, QObject, QThread, Signal, Slot
 
+from ollama import chat
 
 model_size = "small"
 chunk = 1024  # Record in chunks of 1024 samples
@@ -27,6 +28,64 @@ fs = 44100  # Record at 44100 samples per second
 seconds = 10
 filename = "output.wav"
 
+class NoteGenerationWorker(QObject):
+    finished = Signal(str)
+    error = Signal(str)
+    
+    def __init__(self, transcription, file):
+        self.file = file
+        self.transcription = transcription
+        super().__init__()
+    
+    @Slot()
+    def run(self):
+        try:
+            response = chat(
+                model = "qwen3:4b",
+                messages = [
+                    {
+                        "role": "system",
+                        "content": """
+You are a university lecture note-taking assistant.
+
+Your job is to convert long, messy lecture transcripts into clear, structured revision notes.
+
+Rules:
+- Do not invent information that is not present in the transcript.
+- Remove filler, repetition, false starts, and irrelevant conversational remarks.
+- Preserve important definitions, explanations, examples, formulas, technical terms, and lecturer emphasis.
+- Organise the notes into logical sections with clear headings and subheadings.
+- Keep explanations detailed enough to revise from later.
+- If the lecturer gives an example, keep it and explain what concept it demonstrates.
+- If something sounds especially important, likely examinable, or repeatedly emphasised, mark it clearly.
+- Preserve important terminology exactly where possible.
+- If the transcript contains uncertainty or unclear wording, do not silently guess; mark it as unclear.
+- Finish with:
+  1. Key concepts
+  2. Important definitions
+  3. Lecturer examples
+  4. Likely revision points
+  5. A concise overall summary
+"""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""{self.transcription}"""
+                    }
+                ]
+            )
+            
+            with open(self.file, "w", encoding="utf-8") as f:
+                f.write(response.message.content)
+                f.close()
+            
+            self.finished.emit(self.file)
+            
+        except Exception as e:
+            self.error.emit(str(e))
+        
+        
+            
 class TranscribingWorker(QObject):
     finished = Signal(str)
     error = Signal(str)
@@ -126,8 +185,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.record_thread = None
         self.transcribing_thread = None
+        self.generating_thread = None
+        
         self.recording_worker = None
         self.transcribing_worker = None
+        self.generating_worker = None
         self.setWindowTitle("Lecture Assistant")
         self.resize(1200, 800)
 
@@ -259,6 +321,7 @@ class MainWindow(QMainWindow):
         self.record_button.clicked.connect(self.start_recording)
         self.stop_button.clicked.connect(self.stop_recording)
         self.transcribe_button.clicked.connect(self.start_transcribing)
+        self.generate_notes_button.clicked.connect(self.start_generating_notes)
 
         # self.import_button.clicked.connect(...)
         # Eventually this could open QFileDialog
@@ -449,6 +512,74 @@ class MainWindow(QMainWindow):
                 border-bottom: 2px solid #e8e8ea;
             }
         """)
+    def start_generating_notes(self):
+        self.generate_notes_button.setEnabled(False)
+        
+        self.status_label.setText("҉ Generating")
+        with open("test.txt", "r") as f:
+            transcription = str(f.read())
+            
+        self.generating_thread = QThread()
+        self.generating_worker = NoteGenerationWorker(transcription, "note_test.txt")
+        
+        self.generating_worker.moveToThread(self.generating_thread)
+        
+        self.generating_thread.started.connect(
+            self.generating_worker.run
+        )
+        
+        self.generating_worker.finished.connect(
+            self.generating_finished
+        )
+        
+        self.generating_worker.error.connect(
+            self.generating_error
+        )
+        
+        self.generating_worker.finished.connect(
+            self.generating_thread.quit
+        )
+        
+        self.generating_worker.finished.connect(
+            self.generating_worker.deleteLater
+        )
+        
+        self.generating_thread.finished.connect(
+            self.generating_thread_finished
+        )
+        
+        self.generating_worker.error.connect(
+            self.generating_thread.quit
+        )
+        
+        self.generating_worker.error.connect(
+            self.generating_worker.deleteLater
+        )
+        
+        self.generating_thread.start()
+    
+    @Slot()
+    def generating_thread_finished(self):
+        
+        self.generating_thread = None
+        self.generating_worker = None
+    
+    @Slot(str)
+    def generating_finished(self, generated_file):
+        self.status_label.setText("● Notes generated")
+        
+        self.generate_notes_button.setEnabled(True)
+        
+        print(f"Saved generated notes to {generated_file}")
+        
+    @Slot(str)
+    def generating_error(self, error_message):
+        self.status_label.setText("● Generating error")
+        
+        self.generate_notes_button.setEnabled(True)
+        
+        print(f"Generating error: {error_message}")
+        
     def start_transcribing(self):
         self.transcribe_button.setEnabled(False)
         
