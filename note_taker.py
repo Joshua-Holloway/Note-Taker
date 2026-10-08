@@ -31,32 +31,40 @@ class TranscribingWorker(QObject):
     finished = Signal(str)
     error = Signal(str)
     
-    def __init__(self):
+    def __init__(self, file):
+        self.file = file
         super().__init__()
     
     @Slot()
     def run(self):
-        model = WhisperModel(
-            model_size,
-            device="cpu",
-            compute_type="int8"
-        )
-        
-        segments, info = model.transcribe(filename,
-                                          beam_size = 5)
-        
-        with open(filename, "w") as f:
-            for segment in segments:
-                f.write(f"{segment.txt}\n")
+        try:
+            print("Started transcribing")
             
-            f.close
+            model = WhisperModel(
+                model_size,
+                device="cpu",
+                compute_type="int8"
+            )
+            
+            segments, info = model.transcribe(filename,
+                                            beam_size = 5)
+            
+            to_txt(segments)
+            
+            print("Finished transcribing")
+            
+            self.finished.emit(self.file)
+                        
+        except Exception as e:
+            self.error.emit(str(e))
         
     def to_txt(self, segments):
-        with open(filename, "w") as f:
+        with open(self.file, "w") as f:
                     for segment in segments:
                         f.write(f"{segment.txt}\n")
                     
                     f.close
+        return
 class RecordingWorker(QObject):
     finished = Signal(str)
     error = Signal(str)
@@ -125,8 +133,6 @@ class MainWindow(QMainWindow):
 
         # --------------------------------------------------
         # CENTRAL WIDGET
-        # QMainWindow needs a central widget before we can
-        # put layouts/widgets inside it.
         # --------------------------------------------------
 
         central_widget = QWidget()
@@ -158,7 +164,6 @@ class MainWindow(QMainWindow):
         self.lecture_list = QListWidget()
 
         # Temporary examples just so the layout isn't empty.
-        # Remove these once you're loading real lectures.
         self.lecture_list.addItem("Databases and Web Development")
         self.lecture_list.addItem("Functional Programming")
         self.lecture_list.addItem("Artificial Inteligence 2")
@@ -166,9 +171,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.lecture_list)
 
         new_lecture_button = QPushButton("+ New Lecture")
-
-        # FUTURE:
-        # new_lecture_button.clicked.connect(your_function)
+        # will be a new lecture button
 
         sidebar_layout.addWidget(new_lecture_button)
 
@@ -227,9 +230,6 @@ class MainWindow(QMainWindow):
 
         self.model_selector.setCurrentText(model_size)
 
-        # FUTURE:
-        # If you want this dropdown to actually change model_size,
-        # connect its currentTextChanged signal to a function.
 
         header_layout.addWidget(model_label)
         header_layout.addWidget(self.model_selector)
@@ -250,20 +250,17 @@ class MainWindow(QMainWindow):
         self.transcribe_button = QPushButton("Transcribe")
         self.generate_notes_button = QPushButton("Generate Notes")
 
-        # Stop shouldn't really be usable before recording.
         self.stop_button.setEnabled(False)
 
         # --------------------------------------------------
-        # BUTTON FUNCTIONS GO HERE LATER
+        # BUTTON FUNCTIONS GO HERE
         # --------------------------------------------------
-        # Eventually something like:
+
         self.record_button.clicked.connect(self.start_recording)
         self.stop_button.clicked.connect(self.stop_recording)
-
-        # self.stop_button.clicked.connect(...)
+        self.transcribe_button.clicked.connect(self.start_transcribing)
 
         # self.import_button.clicked.connect(...)
-        #
         # Eventually this could open QFileDialog
         # OR become your drag-and-drop alternative.
 
@@ -294,7 +291,7 @@ class MainWindow(QMainWindow):
         status_layout = QHBoxLayout()
 
         self.status_label = QLabel("● Idle")
-        self.duration_label = QLabel("00:00:00")
+        self.duration_label = QLabel("00:00:00") #doesnt do anything yet
 
         status_layout.addWidget(self.status_label)
 
@@ -320,7 +317,7 @@ class MainWindow(QMainWindow):
         self.transcript_box = QPlainTextEdit()
 
         self.transcript_box.setPlaceholderText(
-            "Your lecture transcript will appear here..."
+            "Lecture transcript will appear here..."
         )
 
         transcript_layout.addWidget(self.transcript_box)
@@ -458,7 +455,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText("҉ Transcribing")
         
         self.transcribing_thread = QThread()
-        self.transcribing_worker = TranscribingWorker()
+        self.transcribing_worker = TranscribingWorker("test.txt") #temp file name
         
         self.transcribing_worker.moveToThread(self.transcribing_thread)
         
@@ -486,8 +483,26 @@ class MainWindow(QMainWindow):
             self.transcribing_thread.deleteLater
         )
         
+        self.transcribing_thread.finished.connect(
+            self.transcribing_thread_finished
+        )
+        
+        self.transcribing_worker.error.connect(
+            self.transcribing_thread.quit
+        )
+        
+        self.transcribing_worker.error.connect(
+            self.transcribing_worker.deleteLater
+        )
+        
         self.transcribing_thread.start()
-    
+        
+    @Slot()
+    def transcribing_thread_finished(self):
+        
+        self.transcribing_thread = None
+        self.transcribing_worker = None
+        
     @Slot(str)
     def transcribing_finished(self, transcribed_file):
         self.status_label.setText("● Transcribing saved")
@@ -495,9 +510,6 @@ class MainWindow(QMainWindow):
         self.transcribe_button.setEnabled(True)
         
         print(f"Saved transcription to {transcribed_file}")
-        
-        self.transcribing_thread = None
-        self.transcribing_worker = None
     
     @Slot(str)
     def transcribing_error(self, error_message):
@@ -516,9 +528,6 @@ class MainWindow(QMainWindow):
 
         print(f"Saved recording to {recorded_file}")
 
-        self.record_thread = None
-        self.recording_worker = None
-        
     @Slot(str)
     def recording_error(self, error_message):
         self.status_label.setText("● Recording error")
@@ -527,6 +536,12 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(False)
 
         print(f"Recording error: {error_message}")
+    
+    @Slot()
+    def recording_thread_finished(self):
+        
+        self.record_thread = None
+        self.recording_worker = None
         
     def start_recording(self):
         self.record_button.setEnabled(False)
@@ -562,6 +577,19 @@ class MainWindow(QMainWindow):
         self.record_thread.finished.connect(
             self.record_thread.deleteLater
         )
+        
+        self.record_thread.finished.connect(
+            self.recording_thread_finished
+        )
+        
+        self.recording_worker.error.connect(
+            self.record_thread.quit
+        )
+        
+        self.recording_worker.error.connect(
+            self.recording_worker.deleteLater
+        )
+        
 
         self.record_thread.start()
     
